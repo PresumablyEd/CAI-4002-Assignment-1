@@ -1,5 +1,6 @@
 # solver_impl.py
 import heapq
+from collections import deque
 from typing import List, Tuple, Set, Dict, Optional
 
 # Define the Grid type
@@ -50,7 +51,10 @@ def reconstruct_path(came_from: Dict[Grid, Grid], current: Grid) -> List[Grid]:
     return path[::-1]
 
 def solve_puzzle(start: Grid) -> List[Grid]:
-    """Solve the puzzle using A* algorithm with Manhattan distance."""
+    """
+    Solve the puzzle using A* algorithm with Manhattan distance.
+    Returns a list of states from start -> goal.
+    """
     # Set to track visited states
     visited: Set[Grid] = set()
     # Set to track states in the frontier
@@ -68,7 +72,7 @@ def solve_puzzle(start: Grid) -> List[Grid]:
     while priority_queue:
         # Pop the state with the lowest f_score
         _, current = heapq.heappop(priority_queue)
-        frontier_set.remove(current)
+        frontier_set.discard(current)
         
         # If we've reached the goal, return the path
         if current == goal:
@@ -102,3 +106,53 @@ def solve_puzzle(start: Grid) -> List[Grid]:
     
     # If we've exhausted the search space, return empty path
     return []
+
+from collections import deque
+
+def solve_puzzle_bfs(start: Grid) -> List[Grid]:
+    """Solve the puzzle using Breadth-First Search (guarantees shortest path)."""
+    goal = (1, 2, 3, 4, 5, 6, 7, 8, 0)
+    if start == goal:
+        return [start]
+
+    queue = deque([start])
+    came_from: Dict[Grid, Grid] = {}
+    visited: Set[Grid] = {start}
+
+    while queue:
+        current = queue.popleft()
+        if current == goal:
+            return reconstruct_path(came_from, current)
+
+        for neighbor in get_neighbors(current):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                came_from[neighbor] = current
+                queue.append(neighbor)
+
+    return []  # unsolvable
+
+def solve_puzzle_dfs(start: Grid, depth_limit: int = 30) -> List[Grid]:
+    """Solve puzzle using Depth-First Search (not guaranteed optimal)."""
+    goal = (1, 2, 3, 4, 5, 6, 7, 8, 0)
+    visited: Set[Grid] = set()
+    came_from: Dict[Grid, Grid] = {}
+
+    def dfs(current: Grid, depth: int) -> bool:
+        if depth > depth_limit:
+            return False
+        if current == goal:
+            return True
+
+        visited.add(current)
+        for neighbor in get_neighbors(current):
+            if neighbor not in visited:
+                came_from[neighbor] = current
+                if dfs(neighbor, depth + 1):
+                    return True
+        return False
+
+    if dfs(start, 0):
+        return reconstruct_path(came_from, goal)
+    else:
+        return []  # not found within depth limit
