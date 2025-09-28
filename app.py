@@ -1,20 +1,22 @@
-# app.py — 8-Puzzle UI (image upload at top, manual+autoplay in sidebar, no fallback)
+# app.py — 8-Puzzle UI (image upload at top, manual/auto play in sidebar)
 from typing import List, Tuple, Optional
 import random, json, time
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-Grid = Tuple[int, ...]  # 9 ints in row-major; 0 = blank
+Grid = Tuple[int, ...]  # 9 cells, row-major; 0 = blank
 
-# Try to import your teammate's solver. If missing, disable Solve.
+# Load solvers from solver_impl.py if available
 HAS_SOLVER = True
 try:
-    from solver_impl import solve_puzzle  # teammate must provide this file+function
+    from solver_impl import solve_puzzle, solve_puzzle_bfs, solve_puzzle_dfs
 except Exception:
     HAS_SOLVER = False
     solve_puzzle = None  # type: ignore
+    solve_puzzle_bfs = None  # type: ignore
+    solve_puzzle_dfs = None  # type: ignore
 
-# ---------- puzzle basics ----------
+#  puzzle basics 
 GOAL: Grid = (1, 2, 3, 4, 5, 6, 7, 8, 0)
 ADJ = {
     0:(1,3), 1:(0,2,4), 2:(1,5),
@@ -29,27 +31,27 @@ def neighbors(g: Grid):
         yield tuple(arr)
 
 def shuffle_via_legal_moves(steps: int = 40) -> Grid:
-    """Start at GOAL, do legal moves → guaranteed solvable."""
+    """Shuffle by valid moves from GOAL (always solvable)."""
     g: Grid = GOAL
     prev: Optional[Grid] = None
     for _ in range(steps):
         opts = list(neighbors(g))
         if prev in opts and len(opts) > 1:
-            opts = [x for x in opts if x != prev]  # avoid undo
+            opts = [x for x in opts if x != prev]  # avoid immediate undo
         prev, g = g, random.choice(opts)
     return g
 
-# ---------- image helpers ----------
+#  image helpers 
 def _measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> Tuple[int, int]:
-    """Robust across Pillow versions: try textbbox -> font.getbbox -> font.getsize -> fallback."""
+    """Text size with fallbacks (Pillow versions differ)."""
     try:
-        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-        return right - left, bottom - top
+        l, t, r, b = draw.textbbox((0, 0), text, font=font)
+        return r - l, b - t
     except Exception:
         pass
     try:
-        left, top, right, bottom = font.getbbox(text)
-        return right - left, bottom - top
+        l, t, r, b = font.getbbox(text)
+        return r - l, b - t
     except Exception:
         pass
     try:
@@ -59,6 +61,7 @@ def _measure_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFon
     return max(8, 8 * len(text)), 12
 
 def slice_image_to_tiles(img: Image.Image, side: int = 600) -> List[Image.Image]:
+    """Square-crop, resize, split into 3×3 tiles."""
     img = img.convert("RGB")
     w, h = img.size
     s = min(w, h)
@@ -68,9 +71,10 @@ def slice_image_to_tiles(img: Image.Image, side: int = 600) -> List[Image.Image]
     for r in range(3):
         for c in range(3):
             tiles.append(img.crop((c*step, r*step, (c+1)*step, (r+1)*step)))
-    return tiles  # map tile numbers 1..8 -> tiles[val-1]; 0 = blank
+    return tiles  # 1..8 map to tiles[val-1]; 0 = blank
 
 def render_grid(state: Grid, tiles: Optional[List[Image.Image]], side: int = 600) -> Image.Image:
+    """Draw the board for a given state."""
     canvas = Image.new("RGB", (side, side), (245, 245, 245))
     step = side // 3
     draw = ImageDraw.Draw(canvas)
@@ -93,7 +97,7 @@ def render_grid(state: Grid, tiles: Optional[List[Image.Image]], side: int = 600
     return canvas
 
 def _rerun():
-    # compatible with older/newer Streamlit versions
+    """Force a rerun (handles old/new Streamlit APIs)."""
     try:
         st.rerun()
     except Exception:
@@ -102,12 +106,12 @@ def _rerun():
         except Exception:
             pass
 
-# ---------- Streamlit UI ----------
+#  Streamlit UI 
 st.set_page_config(page_title="8-Puzzle", layout="centered")
 st.title("8-Puzzle")
-st.caption("Upload an image → Shuffle → Solve (A* by teammate) → Step-by-step.")
+st.caption("Upload an image → Shuffle → Solve (A* / BFS / DFS) → Step-by-step.")
 
-# Session state (persists across reruns)
+# Session state
 ss = st.session_state
 if "state" not in ss: ss.state = GOAL
 if "solution" not in ss: ss.solution = []         # List[Grid]
@@ -117,7 +121,7 @@ if "moves_made" not in ss: ss.moves_made = 0
 if "start_time" not in ss: ss.start_time = time.time()
 if "last_tick" not in ss: ss.last_tick = 0.0
 
-# ===== TOP: Image upload (first thing the user sees) =====
+#  TOP: Image upload 
 st.subheader("1) Choose an image (optional)")
 uploaded_main = st.file_uploader("Upload an image (JPG/PNG) for the puzzle tiles", type=["jpg","jpeg","png"])
 if uploaded_main:
@@ -130,13 +134,12 @@ if uploaded_main:
 
 st.divider()
 
-# ----- SIDEBAR: controls -----
+#  SIDEBAR: controls 
 st.sidebar.header("Controls")
 
-# Shuffle intensity
+solver_choice = st.sidebar.selectbox("Solver Algorithm", ["A*", "BFS", "DFS"], index=0)
 shuffle_steps = st.sidebar.slider("Shuffle moves", 10, 100, 40, 5)
 
-# Manual controls (move the blank)
 st.sidebar.subheader("Manual moves")
 def _try_move(dr: int, dc: int):
     g = list(ss.state)
@@ -147,24 +150,23 @@ def _try_move(dr: int, dc: int):
         ni = nr*3 + nc
         g[z], g[ni] = g[ni], g[z]
         ss.state = tuple(g)
-        # user moved manually -> clear any existing solution
         ss.solution, ss.step = [], 0
         ss.moves_made += 1
+        ss.last_tick = 0.0
 
 if st.sidebar.button("⬆️ Up"):    _try_move(-1, 0)
 if st.sidebar.button("⬅️ Left"):  _try_move(0, -1)
 if st.sidebar.button("➡️ Right"): _try_move(0,  1)
 if st.sidebar.button("⬇️ Down"):  _try_move(1,  0)
 
-# Autoplay controls
 st.sidebar.subheader("Autoplay solution")
-auto_play = st.sidebar.checkbox("Enable autoplay", value=False)
-auto_speed_ms = st.sidebar.slider("Speed (ms/step)", 50, 1500, 300, 50)
+auto_play = st.sidebar.checkbox("Enable autoplay", value=False, key="autoplay")
+auto_speed_ms = st.sidebar.slider("Speed (ms/step)", 100, 1500, 300, 50)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Solve enables when `solver_impl.py` with `solve_puzzle(start)` is present.")
+st.sidebar.caption("Solve enables when `solver_impl.py` provides A* / BFS / DFS functions.")
 
-# ----- MAIN: top buttons -----
+#  MAIN: top buttons 
 col1, col2, col3 = st.columns(3)
 
 if col1.button("Shuffle"):
@@ -172,18 +174,25 @@ if col1.button("Shuffle"):
     ss.solution, ss.step = [], 0
     ss.moves_made = 0
     ss.start_time = time.time()
+    ss.last_tick = 0.0
 
 if col2.button("Solve", disabled=not HAS_SOLVER):
     if not HAS_SOLVER:
         st.warning("Solver not found. Ask your teammate to add solver_impl.py.")
     else:
         try:
-            path = solve_puzzle(ss.state)  # expects List[Grid]
+            if solver_choice == "A*":
+                path = solve_puzzle(ss.state)
+            elif solver_choice == "BFS":
+                path = solve_puzzle_bfs(ss.state)
+            else:
+                path = solve_puzzle_dfs(ss.state)
+
             if not isinstance(path, list) or not path:
                 raise ValueError("Solver must return a non-empty list of states.")
             norm: List[Grid] = []
             for s in path:
-                if hasattr(s, "tolist"):  # numpy array
+                if hasattr(s, "tolist"):
                     s = s.tolist()
                 t = tuple(int(x) for x in list(s))
                 if len(t) != 9:
@@ -193,8 +202,9 @@ if col2.button("Solve", disabled=not HAS_SOLVER):
                 norm = [ss.state] + norm
             ss.solution = norm
             ss.step = 0
-            ss.moves_made = 0  # solving resets manual counter
+            ss.moves_made = 0
             ss.start_time = time.time()
+            ss.last_tick = 0.0
         except Exception as e:
             ss.solution = []
             st.error(f"Solver error: {e}")
@@ -203,41 +213,62 @@ if col3.button("Reset"):
     ss.state, ss.solution, ss.step = GOAL, [], 0
     ss.moves_made = 0
     ss.start_time = time.time()
+    ss.last_tick = 0.0
 
-# ----- Playback + stats -----
+#  Playback + stats 
 sol = ss.solution
 elapsed = time.time() - ss.get("start_time", time.time())
 st.caption(f"Manual moves: {ss.moves_made}  •  Elapsed: {elapsed:0.1f}s")
 
+# Clamp indices and compute last_idx
 if sol and len(sol) > 1:
     last_idx = len(sol) - 1
     if ss.step < 0: ss.step = 0
     if ss.step > last_idx: ss.step = last_idx
 
-    # Basic playback
-    b1, b2, b3 = st.columns(3)
+    # Controls above the image
     st.write(f"Solution length: **{last_idx}** moves")
-    if b1.button("Prev", disabled=ss.step <= 0):
+    c1, c2, c3 = st.columns(3)
+    if c1.button("⬅️ Prev", disabled=ss.step <= 0):
         ss.step = max(0, ss.step - 1)
-    if b2.button("Next", disabled=ss.step >= last_idx):
+        ss.last_tick = 0.0
+        _rerun()
+    if c2.button("➡️ Next", disabled=ss.step >= last_idx):
         ss.step = min(last_idx, ss.step + 1)
-    if b3.button("End"):
+        ss.last_tick = 0.0
+        _rerun()
+    if c3.button("⏩ End", disabled=ss.step >= last_idx):
         ss.step = last_idx
+        ss.last_tick = 0.0
+        _rerun()
 
-    # Autoplay tick
-    if auto_play and ss.step < last_idx:
-        now_ms = time.time() * 1000.0
-        if now_ms - ss.last_tick >= auto_speed_ms:
-            ss.step = min(last_idx, ss.step + 1)
-            ss.last_tick = now_ms
-            _rerun()
+    display_state = sol[ss.step]
+    caption = f"Step {ss.step}/{last_idx}"
+else:
+    last_idx = 0
+    display_state = ss.state
+    caption = "Current puzzle"
 
-# ----- Single image render -----
-display_state = sol[ss.step] if (sol and len(sol) > 1) else ss.state
-caption = f"Step {ss.step}/{len(sol)-1}" if (sol and len(sol) > 1) else "Current puzzle"
+#  Show current frame (image) 
 st.image(render_grid(display_state, ss.tiles), caption=caption, use_column_width=True)
 
-# ----- Download solution as JSON -----
+#  Autoplay tick (render, then schedule next step) 
+if sol and len(sol) > 1 and auto_play and ss.step < last_idx:
+    now_ms = time.time() * 1000.0
+    if ss.last_tick == 0.0:
+        ss.last_tick = now_ms
+    due_ms = ss.last_tick + auto_speed_ms
+    remaining_ms = max(0.0, due_ms - now_ms)
+
+    if remaining_ms > 0:
+        time.sleep(remaining_ms / 1000.0)
+
+    ss.step = min(last_idx, ss.step + 1)
+    ss.last_tick = time.time() * 1000.0
+    _rerun()
+    st.stop()
+
+#  Download solution as JSON 
 if sol and len(sol) > 1:
     data = {"path": [list(s) for s in sol]}
     st.download_button("Download solution (JSON)",
@@ -245,6 +276,6 @@ if sol and len(sol) > 1:
                        file_name="solution.json",
                        mime="application/json")
 
-# Tip when solver missing
+# Solver tip
 if not HAS_SOLVER:
     st.caption("Solve will enable when your teammate adds solver_impl.py with solve_puzzle(start).")
