@@ -153,6 +153,7 @@ def solve_puzzle_dfs(start: Grid, depth_limit: int = 30) -> List[Grid]:
         return False
 
     if dfs(start, 0):
+        came_from[start] = start  # Mark start as root for path reconstruction
         return reconstruct_path(came_from, goal)
     else:
-        return []  # not found within depth limit
+        raise ValueError("unsolvable")
