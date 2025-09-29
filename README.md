@@ -19,8 +19,8 @@ For comparison, BFS and DFS implementations are also included to show the tradeo
 Clone this repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/yourusername/8-puzzle-solver.git
-cd 8-puzzle-solver
+git clone https://github.com/PresumablyEd/CAI-4002-Assignment-1.git
+cd CAI-4002-Assignment-1
 python -m pip install streamlit pillow
 ```
 ## Run the app locally
