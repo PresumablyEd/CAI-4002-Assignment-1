@@ -27,3 +27,6 @@ python -m pip install streamlit pillow
 ```bash
 python -m streamlit run app.py
 ```
+## Website Access
+
+https://cai-4002-assignment-1-b27yaza9aeduhrerluaehu.streamlit.app/
